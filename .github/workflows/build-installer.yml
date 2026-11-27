@@ -1,0 +1,58 @@
+name: Build PyNove Setup
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'pynove_installer_v022.py'
+      - 'pynove-setup.ico'
+      - '.github/workflows/build-installer.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            name: PyNove-Setup-linux-x64.elf
+            artifact: PyNove-Setup-linux-x64
+            path: dist/PyNove-Setup-linux-x64.elf
+          - os: windows-latest
+            name: PyNove-Setup-windows-x64
+            artifact: PyNove-Setup-windows-x64
+            path: dist/PyNove-Setup-windows-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Install build dependencies
+        run: python -m pip install 'PyQt6==6.8.1' 'PyQt6-Qt6==6.8.2' 'PyInstaller==6.12.0'
+      - name: Build Linux ELF
+        if: runner.os == 'Linux'
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --name "${{ matrix.name }}" pynove_installer_v022.py
+      - name: Build Windows EXE
+        if: runner.os == 'Windows'
+        run: python -m PyInstaller --noconfirm --clean --onefile --windowed --icon pynove-setup.ico --name "${{ matrix.name }}" pynove_installer_v022.py
+      - name: Check executable format
+        shell: python
+        run: |
+          from pathlib import Path
+          import os
+          p = Path(r'${{ matrix.path }}')
+          with p.open('rb') as f:
+              header = f.read(4)
+          assert header.startswith(b'MZ' if os.name == 'nt' else b'\x7fELF'), header
+          print(f'{p}: {p.stat().st_size:,} bytes')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error
