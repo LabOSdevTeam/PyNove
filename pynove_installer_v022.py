@@ -16,6 +16,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import socket
+import ssl
 import time
 import http.client
 import os
@@ -39,7 +40,7 @@ from PyQt6.QtWidgets import (
 )
 
 APP = 'PyNove'
-SETUP_VERSION = '0.2.2'
+SETUP_VERSION = '0.2.3'
 REPOSITORY = 'LabOSdevTeam/PyNove'
 RELEASE_API = f'https://api.github.com/repos/{REPOSITORY}/releases'
 LOGO_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 24 24">
@@ -110,6 +111,26 @@ def request(url):
         'Accept': 'application/vnd.github+json' if url.startswith(RELEASE_API) else 'application/octet-stream'})
 
 
+def tls_context():
+    """Use bundled public CAs plus the system trust store, with verification on."""
+    context = ssl.create_default_context()
+    try:
+        import certifi
+    except ImportError:
+        certifi = None
+    if certifi is not None:
+        context.load_verify_locations(cafile=certifi.where())
+    if sys.platform.startswith('linux'):
+        for name in ('/etc/ssl/certs/ca-certificates.crt',
+                     '/etc/ssl/cert.pem', '/etc/pki/tls/certs/ca-bundle.crt'):
+            if os.path.isfile(name):
+                try:
+                    context.load_verify_locations(cafile=name)
+                except (OSError, ssl.SSLError):
+                    continue
+    return context
+
+
 class NetworkFailure(RuntimeError):
     pass
 
@@ -118,6 +139,9 @@ def network_error(exc):
     reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
     if isinstance(exc, urllib.error.HTTPError):
         return f'HTTP {exc.code}: {exc.reason}', exc.code in (408, 429, 500, 502, 503, 504)
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return ('TLS certificate verification failed. Check system date, CA certificates '
+                'and HTTPS proxy trust. ' + str(reason)), False
     if isinstance(reason, socket.gaierror):
         return 'DNS lookup failed. Check your internet connection, DNS or proxy.', True
     if isinstance(reason, (TimeoutError, ConnectionError, http.client.IncompleteRead)):
@@ -139,7 +163,7 @@ def network_retry(url, timeout, consume, report=lambda _: None):
     for attempt in range(1, 4):
         redirect = TrackingRedirect(url)
         try:
-            opener = urllib.request.build_opener(redirect)
+            opener = urllib.request.build_opener(redirect, urllib.request.HTTPSHandler(context=tls_context()))
             with opener.open(request(url), timeout=timeout) as response:
                 return consume(response)
         except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as exc:
